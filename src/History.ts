@@ -1,33 +1,48 @@
 import { player, format, formatTimeShort } from './Synergism';
 import Decimal, { DecimalSource } from 'break_infinity.js';
-import { isDecimal } from './Utility';
 import { antSacrificePointsToMultiplier } from './Ants';
 import { Synergism } from './Events';
 
 export type Category = 'ants' | 'reset' | 'ascend';
 export type Kind = 'antsacrifice' | 'prestige' | 'transcend' | 'reincarnate' | 'ascend';
-export type ResetHistoryDate = { 
+
+// Common to every kind
+type ResetHistoryEntryBase = {
+    date: number
+    seconds: number
+    kind: Kind
+};
+
+export type ResetHistoryEntryAntSacrifice = ResetHistoryEntryBase & {
     antSacrificePointsAfter: number
     antSacrificePointsBefore: number
     baseELO: number
-    crumbs: string | Decimal
-    crumbsPerSecond: string | Decimal
-    date: number
+    crumbs: string
+    crumbsPerSecond: string
     effectiveELO: number
-    kind: Kind
     obtainium: number
     offerings: number
-    seconds: number
-    [key: string]: any
+    kind: 'antsacrifice'
 };
 
-export type ResetHistoryAscend = {
-    diamonds: Decimal
+export type ResetHistoryEntryPrestige = ResetHistoryEntryBase & {
     offerings: number
-    seconds: number
-    mythos: Decimal
+    diamonds: string
+    kind: 'prestige'
+}
+export type ResetHistoryEntryTranscend = ResetHistoryEntryBase & {
+    offerings: number
+    mythos: string
+    kind: 'transcend'
+}
+export type ResetHistoryEntryReincarnate = ResetHistoryEntryBase & {
+    offerings: number
+    particles: string
     obtainium: number
-    particles: Decimal
+    kind: 'reincarnate'
+}
+
+export type ResetHistoryEntryAscend = ResetHistoryEntryBase & {
     c10Completions: number
     usedCorruptions: number[]
     corruptionScore: number
@@ -35,17 +50,27 @@ export type ResetHistoryAscend = {
     wowTesseracts: number
     wowHypercubes: number
     wowPlatonicCubes: number
-    currentChallenge: number
-    date?: number
-    kind?: Kind
-    [key: string]: any
+    currentChallenge?: number
+    kind: 'ascend'
 }
 
-// This doesn't pass the extra args to format, and that's on purpose
-const formatPlain = (str: number | Decimal) => format(str);
-const formatDecimalString = (str: DecimalSource) => format(new Decimal(str));
+export type ResetHistoryEntryUnion =
+    ResetHistoryEntryAntSacrifice
+    | ResetHistoryEntryPrestige
+    | ResetHistoryEntryTranscend
+    | ResetHistoryEntryReincarnate
+    | ResetHistoryEntryAscend
 
-const conditionalFormatPerSecond = (numOrStr: Decimal | number, data: ResetHistoryAscend | ResetHistoryDate) => {
+// A formatter that allows formatting a string. The string should be in a form parsable by break_infinity.js.
+const formatStringOrNumber = (numOrStr: number | Decimal | string) => {
+    return format(typeof numOrStr === "string" ? new Decimal(numOrStr) : numOrStr);
+}
+
+// A formatter that, if given a number, allows the data to be divided by the amount of seconds spent.
+const conditionalFormatPerSecond = (numOrStr: number | Decimal | string, data: ResetHistoryEntryBase) => {
+    if (typeof numOrStr === "string") {
+        numOrStr = parseFloat(numOrStr);
+    }
     if (typeof (numOrStr) === "number" && player.historyShowPerSecond) {
         if (numOrStr === 0) { // work around format(0, 3) return 0 instead of 0.000, for consistency
             return "0.000/s";
@@ -60,38 +85,38 @@ const historyGains: Record<
     {
         img: string
         imgTitle: string
-        formatter: (...args: any[]) => string,
-        onlyif?: (...args: any[]) => boolean
+        formatter: (str: DecimalSource, data: ResetHistoryEntryUnion) => string,
+        onlyif?: (data: ResetHistoryEntryUnion) => boolean
     }
 > = {
     offerings: {
         img: "Pictures/Offering.png", 
-        formatter: formatPlain, 
+        formatter: formatStringOrNumber,
         imgTitle: "Offerings"
     },
     obtainium: {
         img: "Pictures/Obtainium.png", 
-        formatter: formatPlain, 
+        formatter: formatStringOrNumber,
         imgTitle: "Obtainium"
     },
     antMulti: {
         img: "Pictures/AntSacrifice.png", 
-        formatter: formatPlain, 
+        formatter: formatStringOrNumber,
         imgTitle: "Ant Multiplier gains"
     },
     particles: {
         img: "Pictures/Particle.png",
-        formatter: formatDecimalString,
+        formatter: formatStringOrNumber,
         imgTitle: "Particles"
     },
     diamonds: {
         img: "Pictures/Diamond.png",
-        formatter: formatDecimalString,
+        formatter: formatStringOrNumber,
         imgTitle: "Diamonds"
     },
     mythos: {
         img: "Pictures/Mythos.png",
-        formatter: formatDecimalString,
+        formatter: formatStringOrNumber,
         imgTitle: "Mythos"
     },
     wowTesseracts: {
@@ -163,18 +188,13 @@ const resetHistoryCorruptionTitles = [
     "Financial Recession [Coins]"
 ];
 
+// A formatting aid that removes the mantissa from a formatted string. Converts "2.5e1000" to "e1000".
 const extractStringExponent = (str: string) => {
     let m: RegExpMatchArray | null = null;
     return (m = str.match(/e\+?(.+)/)) !== null ? `e${m[1]}` : str;
 }
 
-const resetHistoryAdd = (
-    category: Category,
-    kind: Kind,
-    data: ResetHistoryDate | ResetHistoryAscend
-) => {
-    data.date = Date.now();
-    data.kind = kind;
+const resetHistoryAdd = (category: Category, data: ResetHistoryEntryUnion) => {
     if (player.history[category] === undefined) {
         player.history[category] = [];
     }
@@ -183,20 +203,13 @@ const resetHistoryAdd = (
         player.history[category].shift();
     }
 
-    // Convert Decimal objects to string representation, so that the data is loaded properly after a refresh
-    for (const k in data) {
-        if (Object.prototype.hasOwnProperty.call(data, k) && isDecimal(data[k])) {
-            data[k] = data[k].toString();
-        }
-    }
-
     player.history[category].push(data);
     resetHistoryPushNewRow(category, data);
 }
 
 Synergism.on('historyAdd', resetHistoryAdd);
 
-const resetHistoryPushNewRow = (category: Category, data: ResetHistoryAscend | ResetHistoryDate) => {
+const resetHistoryPushNewRow = (category: Category, data: ResetHistoryEntryUnion) => {
     const row = resetHistoryRenderRow(category, data);
     const table = document.getElementById(resetHistoryTableMapping[category]);
     const tbody = table.querySelector("tbody");
@@ -208,7 +221,7 @@ const resetHistoryPushNewRow = (category: Category, data: ResetHistoryAscend | R
 
 const resetHistoryRenderRow = (
     _category: Category, 
-    data: ResetHistoryAscend | ResetHistoryDate
+    data: ResetHistoryEntryUnion
 ) => {
     let colsUsed = 1;
     const row = document.createElement("tr");
@@ -222,13 +235,15 @@ const resetHistoryRenderRow = (
     const gains = [];
     for (let gainIdx = 0; gainIdx < historyGainsOrder.length; ++gainIdx) {
         const showing = historyGainsOrder[gainIdx];
+        // TODO: Rework this code so we don't have to any
+        const lolLmao = data as any;
         if (Object.prototype.hasOwnProperty.call(data, showing)) {
             const gainInfo = historyGains[showing as keyof typeof historyGains];
             if (gainInfo.onlyif && !gainInfo.onlyif(data)) {
                 continue;
             }
             const formatter = gainInfo.formatter || (() => {/* If no formatter is specified, don't display. */});
-            const str = `<img src="${gainInfo.img}" title="${gainInfo.imgTitle || ''}">${formatter(data[showing], data)}`;
+            const str = `<img src="${gainInfo.img}" title="${gainInfo.imgTitle || ''}">${formatter(lolLmao[showing], data)}`;
 
             gains.push(str);
         }
@@ -236,20 +251,22 @@ const resetHistoryRenderRow = (
 
     const extra: string[] = [];
     if (data.kind === "antsacrifice") {
-        const oldMulti = antSacrificePointsToMultiplier(data.antSacrificePointsBefore);
-        const newMulti = antSacrificePointsToMultiplier(data.antSacrificePointsAfter);
+        const entry = data as ResetHistoryEntryAntSacrifice;
+        const oldMulti = antSacrificePointsToMultiplier(entry.antSacrificePointsBefore);
+        const newMulti = antSacrificePointsToMultiplier(entry.antSacrificePointsAfter);
         const diff = newMulti - oldMulti;
         extra.push(
             `<span title="Ant Multiplier: ${format(oldMulti, 3, false)}--&gt;${format(newMulti, 3, false)}"><img src="Pictures/Multiplier.png" alt="Ant Multiplier">+${format(diff, 3, false)}</span>`,
-            `<span title="+${formatDecimalString(data.crumbsPerSecond)} crumbs/s"><img src="Pictures/GalacticCrumbs.png" alt="Crumbs">${extractStringExponent(formatDecimalString(data.crumbs))}</span>`,
+            `<span title="+${formatStringOrNumber(entry.crumbsPerSecond)} crumbs/s"><img src="Pictures/GalacticCrumbs.png" alt="Crumbs">${extractStringExponent(formatStringOrNumber(entry.crumbs))}</span>`,
             `<span title="${format(data.baseELO)} base"><img src="Pictures/Transparent Pics/ELO.png" alt="ELO">${format(data.effectiveELO)}</span>`
         );
     } else if (data.kind === "ascend") {
+        const entry = data as ResetHistoryEntryAscend;
         extra.push(
-            `<img src="Pictures/Transparent Pics/ChallengeTen.png" title="Challenge 10 completions">${data.c10Completions}`
+            `<img src="Pictures/Transparent Pics/ChallengeTen.png" title="Challenge 10 completions">${entry.c10Completions}`
         );
 
-        const corruptions = resetHistoryFormatCorruptions(data);
+        const corruptions = resetHistoryFormatCorruptions(entry);
         if (corruptions !== null) {
             extra.push(corruptions[0]);
             extra.push(corruptions[1]);
@@ -308,7 +325,7 @@ export const resetHistoryTogglePerSecond = () => {
     button.style.borderColor = player.historyShowPerSecond ? "green" : "red";
 }
 
-const resetHistoryFormatCorruptions = (data: ResetHistoryAscend | ResetHistoryDate): [string, string] => {
+const resetHistoryFormatCorruptions = (data: ResetHistoryEntryAscend): [string, string] => {
     let score = "Score: " + format(data.corruptionScore, 0, true);
     let corruptions = "";
     for (let i = 0; i < resetHistoryCorruptionImages.length; ++i) {
